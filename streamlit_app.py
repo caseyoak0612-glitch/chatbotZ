@@ -10,7 +10,6 @@ st.set_page_config(
 )
 
 # --- API Key Setup in Sidebar ---
-# This creates a sidebar where the user can securely enter their API key.
 with st.sidebar:
     st.header("Configuration")
     openai_api_key = st.text_input("Enter your OpenAI API Key", type="password")
@@ -18,7 +17,6 @@ with st.sidebar:
     st.markdown("This app helps you forecast your financial goals by analyzing your budget and projecting savings with and without investment returns.")
 
 # --- Main App Logic ---
-# The rest of the app will only run if an API key is provided.
 if not openai_api_key:
     st.info("Please enter your OpenAI API key in the sidebar to continue.", icon="🗝️")
 else:
@@ -41,9 +39,8 @@ else:
 
     # --- Main App Interface ---
     st.title("💰 Financial Goal Forecaster")
-    st.write("Enter your monthly finances to calculate your budget and project your savings goals.")
+    st.write("Enter your monthly finances to calculate your budget and start a conversation with your AI financial assistant.")
 
-    # Using st.form to group inputs and have a single submission button.
     with st.form("budget_form"):
         st.header("Step 1: Your Monthly Finances")
         col1, col2 = st.columns(2)
@@ -68,15 +65,14 @@ else:
             dining_out = st.number_input("🍔 Dining Out / Entertainment", min_value=0.0, step=25.0, value=250.0)
             other = st.number_input("🛍️ Other Spending", min_value=0.0, step=25.0, value=150.0)
 
-        submitted = st.form_submit_button("Calculate My Budget")
+        submitted = st.form_submit_button("Calculate Budget & Start Chat")
 
-    # --- Calculations and Display Logic ---
     if submitted:
-        # Perform calculations and store results in session state
         st.session_state.total_income = primary_income + additional_income
         st.session_state.total_expenses = sum([housing, utilities, internet, phone, groceries, transportation, insurance, subscriptions, dining_out, other])
         st.session_state.net_balance = st.session_state.total_income - st.session_state.total_expenses
         st.session_state.budget_calculated = True
+        st.session_state.messages = [] # Clear chat history for new budget
 
     if "budget_calculated" in st.session_state and st.session_state.budget_calculated:
         st.header("Step 2: Your Budget Summary")
@@ -86,48 +82,88 @@ else:
         col2.metric("❌ Total Expenses", f"${st.session_state.total_expenses:,.2f}")
         col3.metric("💰 Net Monthly Savings", f"${st.session_state.net_balance:,.2f}")
 
-        if st.session_state.net_balance > 0:
-            st.header("Step 3: Savings Goal Projections")
-            
-            if st.checkbox("Do you have a specific savings goal you'd like to project?"):
-                savings_goal = st.number_input("🎯 What is your savings goal?", min_value=0.0, step=1000.0, value=20000.0)
+        # Initialize the chat and get the AI's first message
+        if not st.session_state.messages:
+            with st.spinner("AI assistant is analyzing your budget..."):
+                initial_prompt = f"""
+                The user has just submitted their budget. Here's the summary:
+                - Total Income: ${st.session_state.total_income:,.2f}
+                - Total Expenses: ${st.session_state.total_expenses:,.2f}
+                - Net Savings: ${st.session_state.net_balance:,.2f}
 
-                if st.button("Project My Goal"):
+                Your task is to start the conversation. First, provide a brief, one-sentence analysis of their budget (e.g., "It looks like you have a healthy surplus each month.").
+                Then, greet them warmly and suggest a few example questions they can ask to get started. Frame the questions to be helpful, such as:
+                - "How can I optimize my discretionary spending?"
+                - "Based on my income, what's a reasonable savings goal to aim for?"
+                - "Can you explain the 50/30/20 budgeting rule and how it applies to me?"
+                """
+                
+                system_prompt = "You are a friendly and encouraging financial assistant AI. Your goal is to help users understand their budget and explore their financial goals."
+                
+                messages_for_api = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": initial_prompt}
+                ]
+                
+                response = openai.chat.completions.create(model="gpt-4o", messages=messages_for_api)
+                initial_ai_message = response.choices[0].message.content
+                st.session_state.messages.append({"role": "assistant", "content": initial_ai_message})
+        
+        st.header("Step 3: Chat with Your AI Assistant")
+
+        # Display chat messages
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+       # Optional Savings Goal Tool
+        if st.session_state.net_balance > 0:
+            with st.expander("Explore a Specific Savings Goal"):
+                savings_goal = st.number_input("🎯 Enter a savings goal amount", min_value=0.0, step=1000.0, value=20000.0)
+                
+                if st.button("Project Goal & Discuss with AI"):
                     net_balance = st.session_state.net_balance
-                    
                     simple_total_months = savings_goal / net_balance
                     simple_years = int(simple_total_months // 12)
                     simple_months = int(simple_total_months % 12)
-
                     invest_years, invest_months = get_investment_timeline(savings_goal, net_balance)
                     
-                    st.subheader("Timelines to Reach Your Goal")
-                    col1_res, col2_res = st.columns(2)
-                    with col1_res:
-                        st.info("**Just Saving**")
-                        st.write(f"It would take **{simple_years} years and {simple_months} months**.")
-                    with col2_res:
-                        st.success("**By Investing** (at 9.9% avg. return)")
-                        st.write(f"You could reach it in **{invest_years} years and {invest_months} months**!")
+                    # Display timelines immediately
+                    st.info(f"**Just Saving:** It would take **{simple_years} years and {simple_months} months**.")
+                    st.success(f"**By Investing:** You could reach it in **{invest_years} years and {invest_months} months**!")
+                    
+                    # --- START: NEW LOGIC ---
+                    # Create the new prompt and add it to the chat history
+                    goal_prompt = f"Great, I've set a goal of ${savings_goal:,.2f}. Based on the timelines calculated, can you give me some investment advice?"
+                    st.session_state.messages.append({"role": "user", "content": goal_prompt})
 
-                    st.subheader("🤖 AI Investment Strategist")
-                    with st.spinner("Generating personalized investment suggestions..."):
-                        ai_prompt = f"""
-                        A user has a savings goal of ${savings_goal:,.2f}. Their monthly investment capacity is ${net_balance:,.2f}.
-                        Their time horizon without investing is {simple_years} years. Based on this, provide a few educational investment suggestions for an actively managed portfolio.
-                        Consider their time horizon for risk tolerance. Suggest a diversified mix of investment types (ETFs, stocks, bonds).
-                        Do NOT give specific stock picks. Frame this as educational information and end with a disclaimer about consulting a human professional.
-                        """
-                        try:
-                            response = openai.chat.completions.create(
-                                model="gpt-4o",
-                                messages=[
-                                    {"role": "system", "content": "You are a knowledgeable investment strategist AI."},
-                                    {"role": "user", "content": ai_prompt}
-                                ]
-                            )
-                            st.write(response.choices[0].message.content)
-                        except Exception as e:
-                            st.error(f"An error occurred with the AI model: {e}", icon="🚨")
-        else:
-            st.error("Your expenses are higher than your income. To project savings, you first need a positive net monthly balance.", icon="⚠️")
+                    # Immediately call the AI with the new prompt
+                    with st.spinner("AI is crafting your investment advice..."):
+                        system_prompt = "You are a friendly and encouraging financial assistant AI. You are having a conversation with a user about their budget. Their budget details were provided in the first message."
+                        messages_for_api = [{"role": "system", "content": system_prompt}] + st.session_state.messages
+                        
+                        response = openai.chat.completions.create(model="gpt-4o", messages=messages_for_api)
+                        full_response = response.choices[0].message.content
+                        
+                        # Add the AI's response to the chat history
+                        st.session_state.messages.append({"role": "assistant", "content": full_response})
+                    
+                    # Rerun to display both the user's new message and the AI's response
+                    st.rerun()
+                    # --- END: NEW LOGIC ---
+
+        # User chat input
+        if prompt := st.chat_input("Ask a question about your budget..."):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    system_prompt = "You are a friendly and encouraging financial assistant AI. You are having a conversation with a user about their budget. Their budget details were provided in the first message."
+                    messages_for_api = [{"role": "system", "content": system_prompt}] + st.session_state.messages
+                    
+                    response = openai.chat.completions.create(model="gpt-4o", messages=messages_for_api)
+                    full_response = response.choices[0].message.content
+                    st.markdown(full_response)
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
